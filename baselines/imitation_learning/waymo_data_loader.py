@@ -20,17 +20,19 @@ def _get_waymo_iterator(paths, dataloader_config, scenario_config):
     # if worker has no paths, return an empty iterator
     if len(paths) == 0:
         return
-
+    steer_actions = torch.round(
+        torch.linspace(-1.0, 1.0, 13), decimals=3
+    )
+    accel_actions = torch.round(
+        torch.linspace(-4.0, 4.0, 7), decimals=3
+    )
+    steer_expanded = steer_actions.view(1, 1, -1)
+    accel_expanded = accel_actions.view(1, 1, -1)
+    print('steer, accel', steer_actions, accel_actions)
     # load dataloader config
     tmin = dataloader_config.get('tmin', 0)
     tmax = dataloader_config.get('tmax', 90)
-    view_dist = dataloader_config.get('view_dist', 80)
-    view_angle = dataloader_config.get('view_angle', np.radians(120))
     dt = dataloader_config.get('dt', 0.1)
-    expert_action_bounds = dataloader_config.get('expert_action_bounds',
-                                                 [[-3, 3], [-0.7, 0.7]])
-    expert_position = dataloader_config.get('expert_position', True)
-    state_normalization = dataloader_config.get('state_normalization', 100)
     n_stacked_states = dataloader_config.get('n_stacked_states', 5)
     device = torch.device('cuda:0' if torch.cuda.is_available() else "cpu")
     while True:
@@ -68,7 +70,7 @@ def _get_waymo_iterator(paths, dataloader_config, scenario_config):
         action_list = []
 
         # iterate over timesteps and objects of interest
-        n_stacked_states = 1 #todo : stacking lock
+        n_stacked_states = 1 # todo : stacking lock
         expert_trajectory_tensor = sim.expert_trajectory_tensor().to_torch()
         num_world, num_vehicle, _ = expert_trejectory_tensor.shape
         # mask = mask.unsqueeze(-1).expand(-1, -1, expert_trajectory_tensor.shape[-1])
@@ -102,8 +104,11 @@ def _get_waymo_iterator(paths, dataloader_config, scenario_config):
             expert_trajectory_tensor = sim.expert_trajectory_tensor().to_torch()
             mask = mask.unsqueeze(-1).expand(-1, -1, expert_trajectory_tensor.shape[-1])
 
-            expert_actions = torch.zeros(num_world, num_vehicle, 3)
-            # print(f'First veh action {invActions[:, :, time]}')
+            # expert_actions = torch.zeros(num_world, num_vehicle, 3)
+            expert_actions_t = invActions[:, :, time]
+            expert_accel = expert_actions_t[:, :, 0]
+            expert_steer = expert_actions_t[:, :, 1]
+            print(f'First veh steer {expert_steer} accel {expert_steer}')
 
             # actions[:, mask] = invActions #todo get mask
             #todo---------------------------------- start here for making expert action know indices mean
