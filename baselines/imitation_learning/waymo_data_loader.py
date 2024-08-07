@@ -14,6 +14,7 @@ from pygpudrive.env.config import SceneConfig
 from pygpudrive.env.scene_selector import select_scenes
 from gpudrive.madrona import ExecMode
 import gpudrive
+from baselines.imitation_learning.normalize import *
 ERR_VAL = -1e4
 
 def _get_waymo_iterator(paths, dataloader_config, scenario_config):
@@ -80,14 +81,17 @@ def _get_waymo_iterator(paths, dataloader_config, scenario_config):
         # print(f'First veh action {invActions[:, :, 0]}')
         for time in range(tmin, tmax):
             # get state
-            ego_state = sim.self_observation_tensor().to_torch() #todo : normalize
-            visible_state = sim.partner_observations_tensor().to_torch() # todo : normalize
+            ego_state = sim.self_observation_tensor().to_torch()
+            ego_state = normalize_ego_state(ego_state)
+            visible_state = sim.partner_observations_tensor().to_torch()
+            visible_state = normalize_and_flatten_partner_obs(visible_state)
             road_map_state = sim.agent_roadmap_tensor().to_torch()
+            road_map_state = normalize_and_flatten_map_obs(road_map_state)
             action_tensor = sim.action_tensor().to_torch()
             print(ego_state.shape, visible_state.shape, road_map_state.shape, action_tensor.shape)
             num_world, num_vehicle, _ = ego_state.shape
-            visible_state = visible_state.reshape(num_world, num_vehicle, -1)
-            road_map_state = road_map_state.reshape(num_world, num_vehicle, -1)
+            # visible_state = visible_state.reshape(num_world, num_vehicle, -1)
+            # road_map_state = road_map_state.reshape(num_world, num_vehicle, -1)
             print(ego_state.shape, visible_state.shape, road_map_state.shape)
             state = torch.cat((ego_state, visible_state, road_map_state), axis=-1)
             mask = (sim.controlled_state_tensor().to_torch() == 1).squeeze(2)
