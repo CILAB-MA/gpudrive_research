@@ -56,17 +56,9 @@ def _get_waymo_iterator(paths, dataloader_config, scenario_config):
             )
         # scenario = sim.getScenario()
         controlled_state_tensor = sim.controlled_state_tensor().to_torch()
-        exper_trejectory_tensor = sim.expert_trajectory_tensor().to_torch()
-        print(f'controlle shape {controlled_state_tensor.shape} expert traj shape {exper_trejectory_tensor.shape}')
+        expert_trejectory_tensor = sim.expert_trajectory_tensor().to_torch()
+        print(f'controlle shape {controlled_state_tensor.shape} expert traj shape {expert_trejectory_tensor.shape}')
         # set objects to be expert-controlled
-        for obj in scenario.getObjects():
-            obj.expert_control = True
-
-        # we are interested in imitating vehicles that moved
-        objects_that_moved = scenario.getObjectsThatMoved()
-        objects_of_interest = [
-            obj for obj in scenario.getVehicles() if obj in objects_that_moved
-        ]
 
         # initialize values if stacking states
         stacked_state = defaultdict(lambda: None)
@@ -79,15 +71,12 @@ def _get_waymo_iterator(paths, dataloader_config, scenario_config):
         for time in range(tmin, tmax):
             for obj in objects_of_interest:
                 # get state
-                ego_state = scenario.ego_state(obj)
-                visible_state = scenario.flattened_visible_state(
-                    obj, view_dist=view_dist, view_angle=view_angle)
-                state = np.concatenate((ego_state, visible_state))
+                ego_state = sim.self_observation_tensor() #todo : normalize
+                visible_state = sim.partner_observations_tensor() # todo : normalize
+                road_map_state = sim.agent_roadmap_tensor()
+                state = np.concatenate((ego_state, visible_state, road_map_state), axis=-1)
 
-                # normalize state
-                state /= state_normalization
-
-                # stack state
+                # stack state # todo: check how to get some information about object ID
                 if n_stacked_states > 1:
                     if stacked_state[obj.getID()] is None:
                         stacked_state[obj.getID()] = np.zeros(
@@ -96,43 +85,17 @@ def _get_waymo_iterator(paths, dataloader_config, scenario_config):
                         stacked_state[obj.getID()], len(state))
                     stacked_state[obj.getID()][:len(state)] = state
 
-                if np.isclose(obj.position.x, ERR_VAL):
+                if np.isclose(obj.position.x, ERR_VAL): # todo: find the position x in state
                     continue
 
-                if not expert_position:
-                    # get expert action
-                    expert_action = scenario.expert_action(obj, time)
-                    # check for invalid action (because no value available for taking derivative)
-                    # or because the vehicle is at an invalid state
-                    if expert_action is None:
-                        continue
-                    expert_action = expert_action.numpy()
-                    # now find the corresponding expert actions in the grids
+                expert_trajectory_tensor = sim.expert_trajectory_tensor().to_torch()
+                traj = expert_trajectory_tensor[:, valid_agent_idx].squeeze()
+                pos = traj[:2 * 91].view(91, 2)
+                vel = traj[2 * 91:4 * 91].view(91, 2)
+                headings = traj[4 * 91:5 * 91].view(91, 1)
+                invActions = traj[6 * 91:].view(91, 3) # todo: make those as a label
 
-                    # throw out actions containing NaN or out-of-bound values
-                    if np.isnan(expert_action).any() \
-                            or expert_action[0] < expert_action_bounds[0][0] \
-                            or expert_action[0] > expert_action_bounds[0][1] \
-                            or expert_action[1] < expert_action_bounds[1][0] \
-                            or expert_action[1] > expert_action_bounds[1][1]:
-                        continue
-                else:
-                    expert_pos_shift = scenario.expert_pos_shift(obj, time)
-                    if expert_pos_shift is None:
-                        continue
-                    expert_pos_shift = expert_pos_shift.numpy()
-                    expert_heading_shift = scenario.expert_heading_shift(
-                        obj, time)
-                    if expert_heading_shift is None \
-                            or expert_pos_shift[0] < expert_action_bounds[0][0] \
-                            or expert_pos_shift[0] > expert_action_bounds[0][1] \
-                            or expert_pos_shift[1] < expert_action_bounds[1][0] \
-                            or expert_pos_shift[1] > expert_action_bounds[1][1] \
-                            or expert_heading_shift < expert_action_bounds[2][0] \
-                            or expert_heading_shift > expert_action_bounds[2][1]:
-                        continue
-                    expert_action = np.concatenate(
-                        (expert_pos_shift, [expert_heading_shift]))
+                actions[:, valid_agent_idx, :] = invActions[0]
 
                 # yield state and expert action
                 if stacked_state[obj.getID()] is not None:
