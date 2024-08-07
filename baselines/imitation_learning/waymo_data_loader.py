@@ -68,43 +68,54 @@ def _get_waymo_iterator(paths, dataloader_config, scenario_config):
         action_list = []
 
         # iterate over timesteps and objects of interest
+        n_stacked_states = 1 #todo : stacking lock
+        expert_trajectory_tensor = sim.expert_trajectory_tensor().to_torch()
+        num_world, num_vehicle, _ = expert_trejectory_tensor.shape
+        # mask = mask.unsqueeze(-1).expand(-1, -1, expert_trajectory_tensor.shape[-1])
+
+        print(expert_trejectory_tensor.shape)
+        invActions = expert_trajectory_tensor[:, :, 6 * 91:].view(num_world, num_vehicle, 91, 3)  # todo: make those as a label
+        # print(f'First veh action {invActions[:, :, 0]}')
         for time in range(tmin, tmax):
-            for obj in objects_of_interest:
-                # get state
-                ego_state = sim.self_observation_tensor() #todo : normalize
-                visible_state = sim.partner_observations_tensor() # todo : normalize
-                road_map_state = sim.agent_roadmap_tensor()
-                state = np.concatenate((ego_state, visible_state, road_map_state), axis=-1)
+            # get state
+            ego_state = sim.self_observation_tensor().to_torch() #todo : normalize
+            visible_state = sim.partner_observations_tensor().to_torch() # todo : normalize
+            road_map_state = sim.agent_roadmap_tensor().to_torch()
+            action_tensor = sim.action_tensor().to_torch()
+            print(ego_state.shape, visible_state.shape, road_map_state.shape, action_tensor.shape)
+            num_world, num_vehicle, _ = ego_state.shape
+            visible_state = visible_state.reshape(num_world, num_vehicle, -1)
+            road_map_state = road_map_state.reshape(num_world, num_vehicle, -1)
+            print(ego_state.shape, visible_state.shape, road_map_state.shape)
+            state = torch.cat((ego_state, visible_state, road_map_state), axis=-1)
+            mask = (sim.controlled_state_tensor().to_torch() == 1).squeeze(2)
+            if n_stacked_states > 1: #todo: check
+                stacked_state = torch.zeros(
+                    num_world, num_vehicle, len(state) * n_stacked_states, dtype=state.dtype)
+                stacked_state = torch.roll(
+                    stacked_state, len(state))
+                stacked_state[:len(state)] = state
 
-                # stack state # todo: check how to get some information about object ID
-                if n_stacked_states > 1:
-                    if stacked_state[obj.getID()] is None:
-                        stacked_state[obj.getID()] = np.zeros(
-                            len(state) * n_stacked_states, dtype=state.dtype)
-                    stacked_state[obj.getID()] = np.roll(
-                        stacked_state[obj.getID()], len(state))
-                    stacked_state[obj.getID()][:len(state)] = state
+            # if np.isclose(obj.position.x, ERR_VAL): # todo: find the position x in state
+            #     continue
 
-                if np.isclose(obj.position.x, ERR_VAL): # todo: find the position x in state
-                    continue
+            expert_trajectory_tensor = sim.expert_trajectory_tensor().to_torch()
+            mask = mask.unsqueeze(-1).expand(-1, -1, expert_trajectory_tensor.shape[-1])
 
-                expert_trajectory_tensor = sim.expert_trajectory_tensor().to_torch()
-                traj = expert_trajectory_tensor[:, valid_agent_idx].squeeze()
-                pos = traj[:2 * 91].view(91, 2)
-                vel = traj[2 * 91:4 * 91].view(91, 2)
-                headings = traj[4 * 91:5 * 91].view(91, 1)
-                invActions = traj[6 * 91:].view(91, 3) # todo: make those as a label
+            expert_actions = torch.zeros(num_world, num_vehicle, 3)
+            # print(f'First veh action {invActions[:, :, time]}')
 
-                actions[:, valid_agent_idx, :] = invActions[0]
+            # actions[:, mask] = invActions #todo get mask
+            #todo---------------------------------- start here for making expert action know indices mean
 
-                # yield state and expert action
-                if stacked_state[obj.getID()] is not None:
-                    if initial_warmup <= 0:  # warmup to wait for stacked state to be filled up
-                        state_list.append(stacked_state[obj.getID()])
-                        action_list.append(expert_action)
-                else:
-                    state_list.append(state)
+            # yield state and expert action
+            if stacked_state[obj.getID()] is not None:
+                if initial_warmup <= 0:  # warmup to wait for stacked state to be filled up
+                    state_list.append(stacked_state[obj.getID()])
                     action_list.append(expert_action)
+            else:
+                state_list.append(state)
+                action_list.append(expert_action)
 
             # step the simulation
             sim.step(dt)
